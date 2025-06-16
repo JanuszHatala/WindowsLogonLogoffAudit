@@ -109,4 +109,4 @@ This project is open source. Feel free to modify and distribute as needed.
 
 ## Contributing
 
-Issues and pull requests are welcome. Please ensure any modifications maintain the script's diagnostic capabilities and error handling.
+Please ensure any modifications maintain the script's diagnostic capabilities and error handling.
