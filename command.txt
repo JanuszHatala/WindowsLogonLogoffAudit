@@ -1,5 +1,5 @@
-powershell -ExecutionPolicy Bypass -File ".\logon-logoff-v3.ps1" -Days 1
-powershell -ExecutionPolicy Bypass -File ".\logon-logoff-v3.ps1" -Days 1 -ExportToCSV
+powershell -ExecutionPolicy Bypass -File ".\logon-logoff-audit.ps1" -Days 1
+powershell -ExecutionPolicy Bypass -File ".\logon-logoff-audit.ps1" -Days 1 -ExportToCSV
 
 Other params:
 -Days 7
