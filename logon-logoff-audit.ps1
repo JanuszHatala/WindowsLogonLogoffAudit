@@ -10,6 +10,37 @@ param(
     [string]$TXTPath = ".\LoginHistory_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 )
 
+# Function to generate a formatted summary of events
+function Get-Summary {
+    param(
+        [Parameter(Mandatory=$true)]
+        [array]$Results
+    )
+
+    $SummaryOutput = @()
+
+    # Group by event type
+    $EventStats = $Results | Group-Object Event | Sort-Object Count -Descending
+    $SummaryOutput += ""
+    $SummaryOutput += "Events by Type:"
+    foreach ($EventType in $EventStats) {
+        $SummaryOutput += "  $($EventType.Name): $($EventType.Count)"
+    }
+
+    # Group by users (excluding system accounts)
+    $UserStats = $Results | Where-Object { $_.User -notmatch '^(SYSTEM|NT AUTHORITY|WORKGROUP)' } |
+                 Group-Object User | Sort-Object Count -Descending
+    if ($UserStats.Count -gt 0) {
+        $SummaryOutput += ""
+        $SummaryOutput += "Activity by User:"
+        foreach ($User in $UserStats) {
+            $SummaryOutput += "  $($User.Name): $($User.Count) events"
+        }
+    }
+
+    return $SummaryOutput
+}
+
 Write-Host "=== WINDOWS 11 LOGIN/LOGOUT AUDIT REPORT ===" -ForegroundColor Green
 Write-Host "Checking last $Days days..." -ForegroundColor Yellow
 Write-Host ""
@@ -57,100 +88,65 @@ try {
 }
 
 Write-Host ""
-Write-Host "=== MAIN SEARCH (FIXED) ===" -ForegroundColor Green
+Write-Host "=== MAIN SEARCH (OPTIMIZED) ===" -ForegroundColor Green
 
 # Array to store results
 $Results = @()
 
 try {
-    Write-Host "Retrieving login/logout events with improved filtering..." -ForegroundColor Cyan
-    
-    # FIXED: Use StartTime in FilterHashtable instead of filtering afterwards
-    # This is more efficient and reliable
-    $Events = @()
-    
-    foreach ($EventID in $EventIDs.Keys) {
-        try {
-            Write-Host "Searching for Event ID $EventID ($($EventIDs[$EventID]))..." -ForegroundColor Gray
-            
-            $EventsForID = Get-WinEvent -FilterHashtable @{
-                LogName = 'Security'
-                ID = $EventID
-                StartTime = $StartDate
-            } -ErrorAction SilentlyContinue
-            
-            if ($EventsForID) {
-                Write-Host "  Found $($EventsForID.Count) events for ID $EventID" -ForegroundColor Green
-                $Events += $EventsForID
-            } else {
-                Write-Host "  No events found for ID $EventID" -ForegroundColor Yellow
-            }
-        } catch {
-            Write-Host "  Error searching for ID $EventID : $($_.Exception.Message)" -ForegroundColor Red
-        }
+    # Optimized: Use a single Get-WinEvent call for all IDs
+    Write-Host "Retrieving all login/logout events at once..." -ForegroundColor Cyan
+
+    $Events = Get-WinEvent -FilterHashtable @{
+        LogName   = 'Security'
+        ID        = [int[]]$EventIDs.Keys
+        StartTime = $StartDate
+    } -ErrorAction SilentlyContinue
+
+    if ($null -eq $Events) {
+        # Ensure $Events is an empty array if nothing is found
+        $Events = @()
     }
-    
+
     # Sort all events by time
     $Events = $Events | Sort-Object TimeCreated -Descending
-    
+
     Write-Host ""
     Write-Host "Found $($Events.Count) total events in specified period" -ForegroundColor Cyan
-    
+
     if ($Events.Count -eq 0) {
         Write-Host ""
-        Write-Host "=== EXTENDED SEARCH ===" -ForegroundColor Yellow
-        
-        # Try a broader search to see if there are ANY events
-        Write-Host "Trying search without time restriction..." -ForegroundColor Cyan
-        
-        $AllEvents = @()
-        foreach ($EventID in $EventIDs.Keys) {
-            try {
-                $EventsForID = Get-WinEvent -FilterHashtable @{
-                    LogName = 'Security'
-                    ID = $EventID
-                } -MaxEvents 10 -ErrorAction SilentlyContinue
-                
-                if ($EventsForID) {
-                    $AllEvents += $EventsForID
-                }
-            } catch {
-                # Ignore errors for this test
+        Write-Host "=== NO EVENTS FOUND ===" -ForegroundColor Yellow
+        Write-Host "No login/logout events found in the last $Days days."
+        Write-Host ""
+        Write-Host "TROUBLESHOOTING:" -ForegroundColor Magenta
+
+        # Programmatically check audit policies
+        try {
+            $LogonPolicy = (auditpol /get /subcategory:Logon | Select-String "Logon").ToString().Trim()
+            Write-Host "Audit Policy for 'Logon': $LogonPolicy" -ForegroundColor $(if ($LogonPolicy -match "Success and Failure|Success") {'Green'} else {'Yellow'})
+
+            if ($LogonPolicy -notmatch "Success and Failure|Success") {
+                Write-Host " -> Logon auditing is not fully enabled. Run this command as Admin:" -ForegroundColor Yellow
+                Write-Host "    auditpol /set /subcategory:Logon /success:enable /failure:enable" -ForegroundColor Gray
             }
+        } catch {
+            Write-Host "Could not check 'Logon' audit policy. Ensure you are running as Administrator." -ForegroundColor Red
         }
-        
-        if ($AllEvents.Count -gt 0) {
-            $AllEvents = $AllEvents | Sort-Object TimeCreated -Descending
-            Write-Host "Found $($AllEvents.Count) login events TOTAL (any time)" -ForegroundColor Green
-            Write-Host "Latest event: $($AllEvents[0].TimeCreated)" -ForegroundColor White
-            Write-Host "Oldest event: $($AllEvents[-1].TimeCreated)" -ForegroundColor White
-            
-            # Check if any events are within our time range
-            $RecentEvents = $AllEvents | Where-Object { $_.TimeCreated -ge $StartDate }
-            if ($RecentEvents.Count -eq 0) {
-                Write-Host ""
-                Write-Host "DIAGNOSIS: Events exist but none in the last $Days days" -ForegroundColor Yellow
-                Write-Host "Try increasing the -Days parameter (e.g., -Days 30)" -ForegroundColor White
-            }
-        } else {
-            Write-Host "Found NO login events in Security log!" -ForegroundColor Red
-            Write-Host ""
-            Write-Host "TROUBLESHOOTING STEPS:" -ForegroundColor Yellow
-            Write-Host "1. Check if audit policy is enabled:" -ForegroundColor White
-            Write-Host "   auditpol /get /subcategory:Logon" -ForegroundColor Gray
-            Write-Host "2. Enable auditing if needed:" -ForegroundColor White
-            Write-Host "   auditpol /set /subcategory:Logon /success:enable /failure:enable" -ForegroundColor Gray
-            Write-Host "3. Check if someone cleared the event log recently" -ForegroundColor White
-        }
+
+        Write-Host "Consider increasing the search time with the -Days parameter (e.g., -Days 30)." -ForegroundColor White
         return
     }
 
     Write-Host "Processing events..." -ForegroundColor Cyan
+    $TotalEvents = $Events.Count
+    $Counter = 0
 
-    foreach ($Event in $Events) {
-        # Convert XML to object for detailed parsing
-        $EventXML = [xml]$Event.ToXml()
-        
+    # Optimized: Use a processing pipeline to avoid slow array concatenation
+    $Results = foreach ($Event in $Events) {
+        $Counter++
+        Write-Progress -Activity "Processing Events" -Status "Event $Counter of $TotalEvents" -PercentComplete (($Counter / $TotalEvents) * 100)
+
         # Initialize variables
         $Username = "N/A"
         $Domain = "N/A"
@@ -158,21 +154,68 @@ try {
         $SourceIP = "N/A"
         $ProcessName = "N/A"
         $WorkstationName = "N/A"
-        
-        # Get event details from EventData
-        $EventData = $EventXML.Event.EventData.Data
-        
-        foreach ($Data in $EventData) {
-            switch ($Data.Name) {
-                "TargetUserName" { $Username = $Data.'#text' }
-                "TargetDomainName" { $Domain = $Data.'#text' }
-                "LogonType" { $LogonType = $Data.'#text' }
-                "IpAddress" { $SourceIP = $Data.'#text' }
-                "ProcessName" { $ProcessName = $Data.'#text' }
-                "WorkstationName" { $WorkstationName = $Data.'#text' }
-                # Fallback to Subject fields for logoff events
-                "SubjectUserName" { if ($Username -eq "N/A" -or [string]::IsNullOrEmpty($Username)) { $Username = $Data.'#text' } }
-                "SubjectDomainName" { if ($Domain -eq "N/A" -or [string]::IsNullOrEmpty($Domain)) { $Domain = $Data.'#text' } }
+
+        # Optimized: Directly access event properties instead of parsing XML
+        $Props = $Event.Properties
+
+        switch ($Event.Id) {
+            4624 { # Successful Logon
+                if ($Props.Count -gt 18) {
+                    $Username = $Props[5].Value
+                    $Domain = $Props[6].Value
+                    $LogonType = $Props[8].Value
+                    $WorkstationName = $Props[11].Value
+                    $ProcessName = $Props[17].Value
+                    $SourceIP = $Props[18].Value
+                }
+            }
+            4625 { # Failed Logon
+                if ($Props.Count -gt 19) {
+                    $Username = $Props[5].Value
+                    $Domain = $Props[6].Value
+                    $LogonType = $Props[10].Value
+                    $WorkstationName = $Props[13].Value
+                    $SourceIP = $Props[19].Value
+                }
+            }
+            4634 { # Logoff
+                if ($Props.Count -gt 4) {
+                    $Username = $Props[1].Value
+                    $Domain = $Props[2].Value
+                    $LogonType = $Props[4].Value
+                }
+            }
+            4647 { # User Initiated Logoff
+                if ($Props.Count -gt 2) {
+                    $Username = $Props[1].Value
+                    $Domain = $Props[2].Value
+                }
+            }
+            4648 { # Logon with Explicit Credentials
+                if ($Props.Count -gt 12) {
+                    $Username = $Props[5].Value # Target User
+                    $Domain = $Props[6].Value
+                    $ProcessName = $Props[10].Value
+                    $SourceIP = $Props[12].Value
+                }
+            }
+            4778 { # RDP Session Reconnected
+                if ($Props.Count -gt 5) {
+                    $Username = $Props[0].Value
+                    $Domain = $Props[1].Value
+                    $WorkstationName = $Props[4].Value
+                    $SourceIP = $Props[5].Value
+                    $LogonType = "10" # RDP is always 10
+                }
+            }
+            4779 { # RDP Session Disconnected
+                if ($Props.Count -gt 5) {
+                    $Username = $Props[0].Value
+                    $Domain = $Props[1].Value
+                    $WorkstationName = $Props[4].Value
+                    $SourceIP = $Props[5].Value
+                    $LogonType = "10" # RDP is always 10
+                }
             }
         }
 
@@ -203,8 +246,8 @@ try {
             $SourceInfo = $WorkstationName
         }
 
-        # Create result object
-        $Result = [PSCustomObject]@{
+        # Create and output the result object, which will be collected by $Results
+        [PSCustomObject]@{
             Date = $Event.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
             Event = $EventIDs[$Event.Id]
             User = if ($Domain -and $Domain -ne "-") { "$Domain\$Username" } else { $Username }
@@ -214,15 +257,15 @@ try {
             "Event ID" = $Event.Id
             Computer = $Event.MachineName
         }
-        
-        $Results += $Result
     }
+    # Hide the progress bar after completion
+    Write-Progress -Activity "Processing Events" -Completed
 
     # Display results
     if ($Results.Count -gt 0) {
         Write-Host ""
         Write-Host "=== FOUND LOGIN/LOGOUT EVENTS ===" -ForegroundColor Green
-        
+
         # Show events based on ShowAll parameter
         if ($ShowAll) {
             Write-Host "Showing all $($Results.Count) events:" -ForegroundColor Cyan
@@ -230,43 +273,30 @@ try {
         } else {
             Write-Host "Showing first 20 events (use -ShowAll to see all):" -ForegroundColor Cyan
             $Results | Select-Object -First 20 | Format-Table -AutoSize -Wrap
-            
+
             if ($Results.Count -gt 20) {
                 Write-Host "... showing first 20 of $($Results.Count) total events (use -ShowAll parameter to see all)" -ForegroundColor Yellow
             }
         }
-        
+
         Write-Host ""
         Write-Host "=== SUMMARY ===" -ForegroundColor Green
         Write-Host "Total Events: $($Results.Count)" -ForegroundColor White
         Write-Host "Period: $(Get-Date $StartDate -Format 'yyyy-MM-dd HH:mm') - $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor White
-        
-        # Group by event type
-        $EventStats = $Results | Group-Object Event | Sort-Object Count -Descending
-        Write-Host ""
-        Write-Host "Events by Type:" -ForegroundColor Cyan
-        foreach ($EventType in $EventStats) {
-            Write-Host "  $($EventType.Name): $($EventType.Count)" -ForegroundColor White
+
+        # Use the reusable function to get summary
+        $SummaryLines = Get-Summary -Results $Results
+        foreach ($Line in $SummaryLines) {
+            Write-Host $Line -ForegroundColor Cyan
         }
-        
-        # Group by users (excluding system accounts)
-        $UserStats = $Results | Where-Object { $_.User -notmatch '^(SYSTEM|NT AUTHORITY|WORKGROUP)' } | 
-                     Group-Object User | Sort-Object Count -Descending
-        if ($UserStats.Count -gt 0) {
-            Write-Host ""
-            Write-Host "Activity by User:" -ForegroundColor Cyan
-            foreach ($User in $UserStats) {
-                Write-Host "  $($User.Name): $($User.Count) events" -ForegroundColor White
-            }
-        }
-        
+
         # Export to files if requested
         if ($ExportToCSV) {
             $Results | Export-Csv -Path $CSVPath -NoTypeInformation -Encoding UTF8
             Write-Host ""
             Write-Host "Results exported to CSV: $CSVPath" -ForegroundColor Green
         }
-        
+
         if ($ExportToTXT) {
             # Create formatted text output
             $TextOutput = @()
@@ -276,7 +306,7 @@ try {
             $TextOutput += "Total Events: $($Results.Count)"
             $TextOutput += ""
             $TextOutput += "=== LOGIN/LOGOUT EVENTS ==="
-            
+
             foreach ($Result in $Results) {
                 $TextOutput += "Date/Time: $($Result.Date)"
                 $TextOutput += "Event: $($Result.Event) (ID: $($Result.'Event ID'))"
@@ -287,35 +317,20 @@ try {
                 $TextOutput += "Computer: $($Result.Computer)"
                 $TextOutput += "----------------------------------------"
             }
-            
+
             $TextOutput += ""
             $TextOutput += "=== SUMMARY ==="
-            
-            # Add event type summary
-            $EventStats = $Results | Group-Object Event | Sort-Object Count -Descending
-            $TextOutput += ""
-            $TextOutput += "Events by Type:"
-            foreach ($EventType in $EventStats) {
-                $TextOutput += "  $($EventType.Name): $($EventType.Count)"
-            }
-            
-            # Add user summary
-            $UserStats = $Results | Where-Object { $_.User -notmatch '^(SYSTEM|NT AUTHORITY|WORKGROUP)' } | 
-                         Group-Object User | Sort-Object Count -Descending
-            if ($UserStats.Count -gt 0) {
-                $TextOutput += ""
-                $TextOutput += "Activity by User:"
-                foreach ($User in $UserStats) {
-                    $TextOutput += "  $($User.Name): $($User.Count) events"
-                }
-            }
-            
+
+            # Use the reusable function to get summary for the text file
+            $SummaryLines = Get-Summary -Results $Results
+            $TextOutput += $SummaryLines
+
             # Write to file with UTF8 encoding
             $TextOutput | Out-File -FilePath $TXTPath -Encoding UTF8
             Write-Host ""
             Write-Host "Results exported to TXT: $TXTPath" -ForegroundColor Green
         }
-        
+
     } else {
         Write-Host "No user login/logout events found in specified period." -ForegroundColor Yellow
         Write-Host "(System account events were filtered out)" -ForegroundColor Gray
