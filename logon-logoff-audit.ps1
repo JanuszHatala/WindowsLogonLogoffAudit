@@ -109,7 +109,7 @@ try {
     }
 
     # Sort all events by time
-    $Events = $Events | Sort-Object TimeCreated -Descending
+    $Events = $Events | Sort-Object TimeCreated
 
     Write-Host ""
     Write-Host "Found $($Events.Count) total events in specified period" -ForegroundColor Cyan
