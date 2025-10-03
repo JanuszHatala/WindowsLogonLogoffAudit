@@ -4,12 +4,14 @@ A PowerShell script for auditing user login and logout events on Windows 11 syst
 
 ## Features
 
-- **Comprehensive Event Tracking**: Monitors login, logout, failed logon attempts, RDP sessions, and more
-- **Flexible Time Range**: Configurable date range (default: last 7 days)
-- **Multiple Export Formats**: Export to CSV or formatted TXT files
-- **Detailed Diagnostics**: Built-in troubleshooting and audit policy checking
-- **Clean Output**: Filters out system accounts for focused user activity reports
-- **Admin Privilege Detection**: Warns if not running with administrator rights
+- **Comprehensive Event Tracking**: Monitors login, logout, failed logon attempts, RDP sessions, and more.
+- **Flexible Time Range**: Configurable date range (default: last 7 days).
+- **Multiple Export Formats**: Export to CSV or formatted TXT files.
+- **Detailed Diagnostics**: Built-in troubleshooting and audit policy checking.
+- **Clean Output**: Filters out system accounts for focused user activity reports. The following accounts are filtered: `SYSTEM`, `ANONYMOUS LOGON`, `LOCAL SERVICE`, `NETWORK SERVICE`, and accounts ending in `$`.
+- **Admin Privilege Detection**: Warns if not running with administrator rights.
+- **Detailed Summary**: Provides a summary of events by type and user activity.
+- **Chronological Sorting**: Displays events from oldest to newest to make them easier to follow.
 
 ## Requirements
 
@@ -66,35 +68,37 @@ powershell -ExecutionPolicy Bypass -File ".\logon-logoff-audit.ps1" -Days 30 -Sh
 
 ## Output Information
 
-The script provides the following details for each event:
+The script provides the following details for each event, sorted from **oldest to newest**:
 - **Date/Time**: When the event occurred
 - **Event Type**: Type of login/logout event
 - **User**: Username and domain
 - **Logon Type**: Method of authentication (Console, RDP, Network, etc.)
 - **Source**: Source IP address or "Local" for console logins
 - **Process**: Process that initiated the logon
+- **Event ID**: The Windows Event ID for the record
 - **Computer**: Machine name where event occurred
+
+## Output Summary
+After displaying the events, the script provides a summary that includes:
+- **Total Events**: The total number of events found.
+- **Events by Type**: A breakdown of event counts by type (e.g., Successful Logon, Logoff).
+- **Activity by User**: A count of events per user.
 
 ## Troubleshooting
 
-If no events are found, the script provides diagnostic information:
-
-1. **Enable Audit Policies** (run as Administrator):
+The script includes a **Diagnostics** section to help with troubleshooting. If no events are found, it will automatically:
+1.  **Check for Security Log Access**: Verifies that the script can access the Security event log.
+2.  **Check Audit Policies**: Checks if the necessary audit policies for "Logon" and "Logoff" are enabled. If not, it provides the commands to enable them:
    ```cmd
    auditpol /set /subcategory:Logon /success:enable /failure:enable
    auditpol /set /subcategory:Logoff /success:enable
    ```
 
-2. **Check Current Audit Settings**:
-   ```cmd
-   auditpol /get /subcategory:Logon
-   ```
-
-3. **Common Issues**:
-   - Not running as Administrator
-   - Audit policies disabled
-   - Event log cleared recently
-   - Time range too narrow
+### Common Issues
+- **Not running as Administrator**: The script may not be able to read the Security log.
+- **Audit policies disabled**: Windows may not be logging the events.
+- **Event log cleared recently**: There may be no events to find in the specified time range.
+- **Time range too narrow**: Try increasing the number of days with the `-Days` parameter.
 
 ## Security Considerations
 
